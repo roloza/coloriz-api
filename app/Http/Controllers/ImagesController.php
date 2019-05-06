@@ -5,130 +5,110 @@ namespace App\Http\Controllers;
 use App\Images;
 use Illuminate\Http\Request;
 use Storage;
+use File;
+use Intervention\Image\ImageManager;
 
 class ImagesController extends Controller
 {
-    /**
-     * Display a listing of the resource.
-     *
-     * @return \Illuminate\Http\Response
-     */
-    public function index()
-    {
-        $results = [];
-        $queries = Images::select('query')->groupBy('query')->take(50)->get();
-        foreach ($queries as $query) {
-            $results[] = $query->query;
-        }
-        return response()->json($results);
 
-    }
-
-    /**
-     * Store a newly created resource in storage.
-     *
-     * @param  \Illuminate\Http\Request  $request
-     * @return \Illuminate\Http\Response
-     */
-    public function store(Request $request)
-    {
-        $params = $request->all();
-        $query = isset($params['q']) ? $params['q'] : '';
-        $results = Images::select(['query', 'slug', 'img_path', 'img_name', 'color', 'palette'])->where('query', $query)->get();
-        if($results->isEmpty()) {
-            $vqd = $this->getDuckVqdParam($query);
-            $results = $this->getDuckImages($vqd, $query);
-        }
+    public function show($id) {
+        $image = Images::where('id', $id)->first();
+        $image->url = url('storage/'.$image->path);
         return response()->json([
-            'type'      => 'store',
-            'query'     => $query,
-            'slug'      => str_slug($query),
-            'results'   => $results
+            'state'     => 'success',
+            'results'   => $image
         ]);
     }
-
-    /**
-     * Display the specified resource.
-     *
-     * @param  \App\Images  $images
-     * @return \Illuminate\Http\Response
-     */
-    public function show($query)
-    {
-        $results = Images::select(['query', 'slug', 'img_path', 'img_name', 'color', 'palette'])->where('query', $query)->get();
-        foreach ($results as $result) {
-            $result['palette'] = json_decode($result['palette']);
+    public function storeImage($contents, $folder = '', $image = [], $resize = false) {
+        // Par défaut les images sont sauvegardées dans un répertoire commons
+        if ($folder == '') {
+            $folder = 'commons';
         }
-        return response()->json([
-            'type'      => 'show',
-            'query'     => $query,
-            'slug'      => str_slug($query),
-            'results'   => $results
-        ]);
-    }
 
-    private function getDuckVqdParam($query) {
-        $vqd = null;
-        $url = 'https://duckduckgo.com/?t=hg&iar=images&iax=images&ia=images&q='.urlencode($query);
-        $content = $this->Download($url);
-        preg_match_all("/vqd='(.*?)'/", $content, $matches, PREG_PATTERN_ORDER);
-        if (sizeof($matches) == 2) {
-            $vqd = current($matches[1]);
-        }
-        return $vqd;
-    }
-
-    private function Download($url) {
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, $url);
-        curl_setopt($ch, CURLOPT_POST, 0);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-
-        $response = curl_exec ($ch);
-        $err = curl_error($ch);  //if you need
-        curl_close ($ch);
-        return $response;
-    }
-
-    private function getDuckImages($vqd, $query) {
-        $listImages = [];
-        $images = [];
-        if ($vqd == null) {
-            return $images;
-        }
-        $querySlug = str_slug($query);
-        $url = 'https://duckduckgo.com/i.js?l=fr-fr&o=json&q='.$query.'&vqd='.$vqd.'&f=,,,&p=1';
-        $content = json_decode($this->Download($url));
-        foreach($content->results as $k => $result) {
-            $images[] = [
-                'path' => $querySlug.'/'.$querySlug.'-'.$k,
-                'name' => $querySlug.'-'.$k,
-                'url' => $result->thumbnail
-            ];
-        }
-        $i = 0;
         $datas = [];
-        foreach ($images as $image) {
-            if ($i > 11) {
-                break;
-            }
-            $contents = file_get_contents($image['url']);
-            $img = 'public/'.$image['path'];
-            Storage::put($img, $contents);
-            $imgSize = Storage::size($img);
-            if ($imgSize > 0) {
-                $i++;
-                $datas[] = [
-                    'query'     => $query,
-                    'slug'      => $querySlug,
-                    'img_path'  => $image['path'],
-                    'img_name'  => $image['name'],
-                    'color'     => null,
-                    'palette'   => null
-                ];
+        $name = '';
+        $img = 'fileupload/'. $folder . '/'; // Répertoire ou sont stockées les images
+        $name = isset($image['name']) ? $image['name'] : md5(uniqid(rand(), true));
+        $img .= isset($image['path']) ? $image['path'] : $name;
+        $publicImg = 'public/'. $img; // Répertoire publique (accès image côté serveur)
+        
+        // Test si le nom de l'image existe déja
+        $imageData = $this->imageData($name);
+        if(!empty($imageData)) {
+            $datas = $imageData;
+            $datas['state'] = 'error';
+            $datas['message'] = 'Le fichier existe déja';
+            return $datas;
+        }
+
+        // Enregistre l'image
+        Storage::put($publicImg, $contents);
+        $storagePath = storage_path('app/'.$publicImg);
+        
+        // Identification du format de l'image
+        $mimetype = File::mimeType($storagePath);
+        $extension = $this->getExtension($mimetype);
+
+        if (!Storage::exists($publicImg . '.'. $extension)) {
+            // Ajout de l'extension au nom de l'image
+            $newpath = Storage::move($publicImg, $publicImg . '.'. $extension);
+
+            if ($resize) {
+                /* Resize image */
+                $manager = new ImageManager();
+                $image = $manager->make($storagePath. '.'. $extension);
+                $image->resize(470, null, function ($constraint) {
+                    $constraint->aspectRatio(); // Respect du ratio initial
+                    $constraint->upsize(); // N'agrandi pas l'image si elle est très petite
+                });
+                $image->save();
             }
         }
-        Images::insert($datas);
+        $data = getimagesize($storagePath . '.'. $extension);
+        $size = File::size($storagePath . '.'. $extension);
+        $datas = [
+            'path'          => $img . '.'. $extension,
+            'name'          => $name,
+            'width'         => (sizeof($data) > 0) ? $data[0] : null,
+            'height'        => (sizeof($data) > 0) ? $data[1] : null,
+            'size'          => $size,
+            'type'          => $mimetype,
+            'color'         => null,
+            'palette'       => null,
+            'created_at'    => date("Y-m-d H:i:s"),
+            'updated_at'    => date("Y-m-d H:i:s") 
+        ];
+        
+
+        try {
+            $datas['id'] = Images::insertGetId($datas);
+            $datas['state'] = 'new';
+        } catch (\Illuminate\Database\QueryException $e) {
+            $imageData = $this->imageData($img . '.'. $extension);
+            $datas = $imageData;
+            $datas['state'] = 'error';
+            $datas['message'] = $e->getMessage();
+        }
+
+        $datas['url'] =  url('storage/'.$datas['path']);
         return $datas;
+    }
+
+    private function getExtension ($mime_type){
+
+        $extensions = [
+            'image/gif' => 'gif', 
+            'image/png' => 'png', 
+            'image/jpeg' => 'jpg'
+        ];    
+        return $extensions[$mime_type];
+    }
+
+    private function imageData($name) {
+        $res = Images::where(['name' => $name])->first();
+        if ($res !== null) {
+            return $res->getAttributes();
+        }
+        return null;
     }
 }

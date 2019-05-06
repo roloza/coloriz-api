@@ -16,7 +16,19 @@ use Illuminate\Http\Request;
 Route::middleware('auth:api')->get('/user', function (Request $request) {
     return $request->user();
 });
-Route::resource('images', 'ImagesController');
+Route::resource('images', 'SearchImagesController');
+Route::resource('coloriz', 'ColorizController');
+Route::resource('brands', 'BrandController');
+Route::resource('image', 'ImagesController');
 Route::resource('colors', 'ColorsController');
 Route::resource('upload', 'FileUploadController');
-route::get('test-colors', 'ColorsController@testColor');
+Route::resource('compress', 'CompressController');
+Route::resource('browsershot', 'BrowsershotController');
+
+Route::resource('tags', 'TagsController');
+Route::resource('categories', 'CategoriesController');
+
+/* Pour test */
+Route::get('color-name/{color}', 'ColorsController@getColorName');
+Route::get('category/colors/add', 'ColorsController@addColors');
+Route::get('category/colors/update-images', 'ColorsController@updateImagesWithoutColor');

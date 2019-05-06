@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use Storage;
 use ColorThief\ColorThief;
+use App\Images;
 
 class FileUploadController extends Controller
 {
@@ -19,21 +20,29 @@ class FileUploadController extends Controller
                 'message'   => 'Invalid file type'
             ]);
         }
-        $uploadedFile->move(public_path('uploads'), $uploadedFile->getClientOriginalName());
-        $img = public_path('uploads/'. $uploadedFile->getClientOriginalName());
-        $color = $this->rgb2hex(ColorThief::getColor($img));
 
-        $paletteRgb = ColorThief::getPalette($img, 6);
-        $palette = [];
-        foreach($paletteRgb as $colorRgb) {
-            $palette[] = $this->rgb2hex($colorRgb);
-        }
+        $imagesController = new ImagesController();
+        $content = file_get_contents($uploadedFile);
+        $imageDatas = $imagesController->storeImage($content, 'uploads', [], true);
+
+        $colorController = new ColorsController();
+        $imageRequest = new Request();
+        $imageRequest->setMethod('POST');
+        $imageRequest->request->add(['img' => $imageDatas['name']]);
+        $colors = $colorController->store($imageRequest)->getData();
+        if ($colors->state !== 'success') {
+            return response()->json([
+                'state'     => 'error',
+                'message'   => 'Erreur lors de la récupération des couleurs'
+            ]);
+        }        
 
         return response()->json([
             'state'     => "success",
-            'color'     => $color,
-            'palette'   => $palette,
-            'filepath'  => '/uploads/' . $uploadedFile->getClientOriginalName()
+            'color'     => $colors->color,
+            'palette'   => $colors->palette,
+            'filepath'  => url('storage/'.$imageDatas['path']),
+            'image_id'  => $imageDatas['id']
         ]);
     }
 
